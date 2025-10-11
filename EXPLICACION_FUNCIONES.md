@@ -160,6 +160,155 @@ Cada chirp tiene **dos segmentos**:
 
 Esto crea el cambio brusco de frecuencia característico de LoRa.
 
+### Explicacion sobremuestreo y demas
+
+  Línea 2: sobremuestreo = 1/(Bw*T)
+
+  ¿Qué hace? Calcula el factor de sobremuestreo.
+
+  Teoría:
+  - El teorema de Nyquist requiere que la tasa de muestreo sea al menos 2× el ancho de banda
+  - Bw = ancho de banda del chirp (Hz)
+  - T = período de muestreo (segundos)
+  - 1/(Bw·T) representa cuántas veces más rápido muestreamos respecto al mínimo teórico
+
+  En la práctica:
+  - Para simulación en banda base: Bw=1, T=1 → sobremuestreo=1 (sin sobremuestreo adicional)
+  - Para sistemas reales: se usa sobremuestreo para mejorar la interpolación y reducir aliasing
+
+  Relación con frecuencia de muestreo:
+  - Fs = 1/T = frecuencia de muestreo
+  - sobremuestreo = Fs/Bw (relación entre tasa de muestreo y ancho de banda)
+
+    ---
+  Línea 3: k = np.arange(M*sobremuestreo)
+
+  ¿Qué hace? Crea el vector de índices temporales discretos.
+
+  Teoría:
+  - k representa el índice de tiempo discreto: k = 0, 1, 2, ..., M-1
+  - Cada valor de k corresponde a una muestra temporal específica: tiempo real = k·T
+  - Con sobremuestreo=1: k va de 0 a M-1 (128 muestras para SF=7)
+  - Con sobremuestreo>1: se generan más muestras intermedias
+
+  Interpretación física:
+  - k=0: inicio del chirp
+  - k=M/2: mitad del chirp
+  - k=M-1: final del chirp
+
+  ---
+    ---
+  Línea 4: waveform = np.zeros((len(s), len(k)), dtype=complex)
+
+  ¿Qué hace? Pre-aloca una matriz para almacenar todos los chirps.
+
+  Teoría:
+  - Matriz 2D: filas = símbolos, columnas = muestras temporales
+  - Tipo complejo: los chirps son señales complejas (I/Q) con magnitud y fase
+  - Dimensiones: [N_símbolos × M] donde N_símbolos = len(s)
+
+  Estructura:
+  waveform[0, :] → chirp del símbolo s[0] (128 muestras complejas)
+  waveform[1, :] → chirp del símbolo s[1] (128 muestras complejas)
+  ---
+
+  ¿Por qué complejas?
+  - Representación I/Q estándar en comunicaciones digitales
+  - Permite modular tanto fase como amplitud
+  - Facilita operaciones de modulación/demodulación
+
+  ---
+  ---
+  Línea 6: for i, simbolo in enumerate(s):
+
+  ¿Qué hace? Itera sobre cada símbolo a transmitir.
+
+  Teoría:
+  - Cada símbolo entero s[i] (entre 0 y M-1) genera un chirp único
+  - El símbolo determina el desplazamiento de frecuencia inicial del chirp
+  - Este bucle construye el tren de chirps completo (payload)
+
+  ---
+    ---
+  Línea 7: fase = ((simbolo + k/sobremuestreo)) * (k*T*Bw) / M
+
+  ¿Qué hace? Calcula la fase instantánea del chirp según la ecuación (2) de Vangelista.
+
+  Teoría - Ecuación Original:
+
+  $$c(nT_s + kT) = \frac{1}{\sqrt{M}} \cdot e^{j2\pi \cdot \left[ \frac{(s + k \bmod M) \cdot k}{M} \right]}$$
+
+  Desglose matemático:
+
+  1. (simbolo + k/sobremuestreo):
+    - Implementa (s + k mod M)
+    - s (símbolo) actúa como desplazamiento frecuencial inicial
+    - k hace que la fase aumente con el tiempo
+    - La suma crea el barrido de frecuencia característico del chirp
+  2. k*T*Bw:
+    - Normaliza el tiempo discreto k al dominio continuo
+    - T = período de muestreo
+    - Bw = ancho de banda
+    - k·T·Bw representa el tiempo normalizado por el ancho de banda
+  3. / M:
+    - Normaliza la fase al rango [0, 1) dentro de un chirp
+    - Divide la fase total (2π) en M pasos discretos
+
+  Interpretación física:
+  - La fase es cuadrática en k: φ(k) ∝ k²
+  - Esto genera una frecuencia instantánea lineal: f(k) = dφ/dk ∝ k
+  - El chirp "barre" linealmente desde frecuencia baja a alta (up-chirp)
+
+  Efecto del símbolo:
+  - Símbolo s=0: chirp empieza en f=0
+  - Símbolo s=64: chirp empieza en f=64/M (mitad del ancho de banda)
+  - Cada símbolo produce un chirp con desplazamiento circular de frecuencia
+
+  ---
+    ---
+  Línea 8: chirp = (1 / np.sqrt(M)) * np.exp(1j * 2 * np.pi * fase)
+
+  ¿Qué hace? Genera el chirp complejo normalizado.
+
+  Teoría:
+
+  1. np.exp(1j * 2 * np.pi * fase):
+    - Fórmula de Euler: $e^{j\theta} = \cos(\theta) + j\sin(\theta)$
+    - Convierte la fase en señal compleja sobre el círculo unitario
+    - 2π·fase convierte la fase normalizada [0,1] a radianes [0, 2π]
+  2. (1 / np.sqrt(M)):
+    - Factor de normalización de energía
+    - Asegura que cada chirp tenga energía unitaria: $E_s = \sum_{k=0}^{M-1} |c(k)|^2 = 1$
+    - Sin esto: energía sería M → problemas al calcular SNR
+
+  Demostración:
+  Energía sin normalizar = Σ|e^(jθ)|² = Σ1 = M
+  Energía con normalizar = Σ|(1/√M)·e^(jθ)|² = (1/M)·Σ1 = 1 ✓
+
+  ¿Por qué es importante la normalización?
+  - Mantiene potencia constante independientemente de SF
+  - Permite comparaciones justas de BER/SER entre diferentes SF
+  - Facilita el cálculo correcto de SNR en el canal AWGN
+
+  --- 
+  Resumen Conceptual
+
+  Flujo del Proceso:
+
+  1. Entrada: Símbolos enteros [0, M-1]
+  2. Mapeo: Cada símbolo → desplazamiento de frecuencia
+  3. Generación: Crear chirp con fase cuadrática
+  4. Normalización: Energía unitaria por símbolo
+  5. Salida: Matriz de señales complejas I/Q
+
+  Propiedades Clave de los Chirps Generados:
+
+  - ✅ Ortogonales: Chirps de diferentes símbolos son ortogonales
+  - ✅ Energía constante: Todos tienen energía = 1
+  - ✅ Barrido lineal: Frecuencia aumenta linealmente con k
+  - ✅ Periodicidad circular: Frecuencia "envuelve" al llegar a M`
+
+  ---
 ### Implementación
 
 ```python
@@ -239,6 +388,152 @@ def downchirp(SF, T, Bw):
 El downchirp es el **conjugado complejo** del upchirp base, lo que permite la demodulación coherente.
 
 ---
+### Canal de rudio AWNG
+ ---
+  2. SNR (Signal-to-Noise Ratio)
+
+  El SNR mide la relación entre la potencia de la señal y la potencia del ruido:
+
+  $$\text{SNR} = \frac{P_{\text{señal}}}{P_{\text{ruido}}} = \frac{E_s}{N_0}$$
+
+  Donde:
+  - $E_s$ = energía de la señal por símbolo
+  - $N_0$ = densidad espectral de potencia del ruido (potencia por Hz)
+
+  Usualmente se expresa en decibelios (dB):
+
+  $$\text{SNR}{\text{dB}} = 10 \log{10}\left(\frac{E_s}{N_0}\right)$$
+
+  ---
+  Paso a Paso de la Implementación
+
+  Paso 1: Normalización de la Señal Transmitida
+
+  chirp_tx_normalizado = chirp_tx / np.sqrt(np.mean(np.abs(chirp_tx)**2, axis=1, keepdims=True))
+
+  Objetivo: Asegurar que cada chirp tenga potencia unitaria ($P_s = 1$)
+
+  ¿Por qué?
+  - La potencia de una señal compleja se calcula como: $P_s = \frac{1}{M}\sum_{k=0}^{M-1}|x[k]|^2$
+  - Al normalizar dividiendo por $\sqrt{P_s}$, garantizamos $P_s = 1$
+  - Esto permite controlar el SNR de forma precisa a través del ruido
+
+  Efecto: Todos los chirps entran al canal con la misma energía, independientemente del símbolo transmitido.
+
+  ---
+  Paso 2: Conversión de SNR de dB a Escala Lineal
+
+  snr_lineal = 10**(snr_db / 10.0)
+
+  Aplicamos la fórmula inversa de conversión a dB:
+
+  $$\text{SNR}{\text{lineal}} = 10^{\frac{\text{SNR}{\text{dB}}}{10}}$$
+
+  Ejemplo:
+  - Si $\text{SNR}_{\text{dB}} = -10$ dB
+  - Entonces $\text{SNR}_{\text{lineal}} = 10^{-1} = 0.1$
+
+  ---
+  Paso 3: Cálculo de la Potencia del Ruido
+
+  potencia_ruido_N0 = 1.0 / snr_lineal
+
+  Dado que normalizamos $E_s = 1$:
+
+  $$\text{SNR} = \frac{E_s}{N_0} = \frac{1}{N_0} \implies N_0 = \frac{1}{\text{SNR}_{\text{lineal}}}$$
+
+  Ejemplo:
+  - Si $\text{SNR}_{\text{lineal}} = 0.1$
+  - Entonces $N_0 = 10$ (el ruido tiene 10 veces más potencia que la señal)
+
+  ---
+  Paso 4: Cálculo de la Desviación Estándar del Ruido Complejo
+
+  sigma = np.sqrt(potencia_ruido_N0 / 2.0)
+
+  Para ruido complejo, la potencia total se divide entre las componentes real e imaginaria:
+
+  $$\sigma^2_{\text{real}} = \sigma^2_{\text{imag}} = \frac{N_0}{2}$$
+
+  Por lo tanto:
+
+  $$\sigma = \sqrt{\frac{N_0}{2}}$$
+
+  ¿Por qué dividir entre 2?
+  - El ruido complejo $n = n_I + jn_Q$ tiene dos componentes independientes
+  - La potencia total es: $E[|n|^2] = E[n_I^2] + E[n_Q^2] = 2\sigma^2$
+  - Para que $E[|n|^2] = N_0$, cada componente debe tener varianza $\sigma^2 = N_0/2$
+
+  ---
+  Paso 5: Generación de Ruido Gaussiano Complejo
+
+  ruido_complejo = np.random.normal(0, sigma, size=chirp_tx.shape) + 1j * np.random.normal(0, sigma, size=chirp_tx.shape)
+
+  Se genera:
+  - Componente real: $n_I \sim \mathcal{N}(0, \sigma^2)$
+  - Componente imaginaria: $n_Q \sim \mathcal{N}(0, \sigma^2)$
+
+  Ambas son independientes y con media 0.
+
+  Resultado: Ruido complejo $n = n_I + jn_Q$ con potencia total $N_0$
+
+  ---
+  Paso 6: Adición de Ruido a la Señal
+
+  return chirp_tx_normalizado + ruido_complejo
+
+  Implementa el modelo fundamental:
+
+  $$r[k] = s[k] + n[k]$$
+
+  ---
+  Validación del Modelo
+
+  Según el paper de Vangelista (Sección IV), bajo canal AWGN:
+
+  - SNR = -10 dB → BER esperado ≈ 0.02
+  - Tu simulación logra: BER = 0.019 ✅
+
+  Esto confirma que la implementación es correcta y coincide con los resultados teóricos.
+
+  ---
+
+  1. Entrada a agregacion_AWNG
+
+  Cuando llamás:
+  chirps_tx = waveform_former(simbolos_tx, SF, T, Bw)  # Retorna matriz (N_simbolos, M)
+  chirps_rx_con_ruido = agregacion_AWNG(chirps_tx, -10)
+
+  Forma de chirps_tx:
+  - (N_simbolos, M) donde:
+    - N_simbolos = cantidad de símbolos (por ejemplo, 10000)
+    - M = 2^SF = muestras por chirp (128 para SF=7)
+
+  Por ejemplo: chirps_tx.shape = (10000, 128)
+
+  ---
+  Paso a Paso dentro de agregacion_AWNG
+
+  Paso 1: Normalización con Broadcasting
+
+  chirp_tx_normalizado = chirp_tx / np.sqrt(np.mean(np.abs(chirp_tx)**2, axis=1, keepdims=True))
+
+  ¿Qué hace axis=1, keepdims=True?
+
+  1. np.abs(chirp_tx)**2: Calcula potencia de cada muestra → forma (10000, 128)
+  2. np.mean(..., axis=1): Promedia a lo largo del eje 1 (columnas) → forma (10000,)
+    - Calcula la potencia promedio de cada chirp individual
+  3. keepdims=True: Mantiene la dimensión → forma (10000, 1)
+    - Esto es clave para el broadcasting
+  4. np.sqrt(...): Toma raíz cuadrada → forma (10000, 1)
+  5. División con Broadcasting:
+  (10000, 128) / (10000, 1) → (10000, 128)
+    - NumPy repite automáticamente el denominador (10000, 1) a lo largo de las 128 columnas
+    - Cada fila se divide por su propio factor de normalización
+
+  Resultado: Cada chirp se normaliza independientemente a potencia unitaria.
+
+  ---
 
 ## Relación entre BER y SER
 
@@ -517,3 +812,34 @@ Señal → n_tuple_former() → decoder() → Bits
 - ✅ Implementación 100% funcional
 
 Este documento sirve como guía completa para entender y explicar el funcionamiento del proyecto a nivel técnico y teórico.
+
+  3. ¿Por qué el Canal Selectivo ANTES del Ruido AWGN?
+
+  Respuesta corta: Porque así sucede en la realidad física.
+
+  Explicación Detallada
+
+  Paso 1: Propagación en el Canal (primero)
+
+  La señal viaja por el medio físico:
+  - Reflexión: Ondas rebotan en edificios, montañas
+  - Difracción: Ondas rodean obstáculos
+  - Dispersión: Ondas se esparcen por objetos pequeños
+
+  Esto causa que múltiples copias de la señal lleguen al receptor con diferentes retardos y atenuaciones.
+
+  Modelo matemático:
+  $$s_{\text{canal}}(t) = s(t) * h(t) = \sqrt{0.8} \cdot s(t) + \sqrt{0.2} \cdot s(t-T)$$
+
+  La señal ahora es una suma de copias retrasadas de sí misma.
+
+  Paso 2: Adición de Ruido (después)
+
+  Una vez que la señal llega al receptor (ya distorsionada por el canal), el ruido térmico se suma:
+  - Ruido en el amplificador del receptor (LNA)
+  - Ruido térmico de componentes electrónicos
+  - Interferencia electromagnética ambiental
+
+  $$r(t) = s_{\text{canal}}(t) + n(t) = [s(t) * h(t)] + n(t)$$
+
+  Observación clave: El ruido NO viaja por el canal, se genera localmente en el receptor.
