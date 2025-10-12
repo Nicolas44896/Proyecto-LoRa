@@ -843,3 +843,161 @@ Este documento sirve como guía completa para entender y explicar el funcionamie
   $$r(t) = s_{\text{canal}}(t) + n(t) = [s(t) * h(t)] + n(t)$$
 
   Observación clave: El ruido NO viaja por el canal, se genera localmente en el receptor.
+
+
+## Detector de tramas V2
+
+dechirp_cpa(sig, start_idx, SF, T, Bw, is_up=True, zero_padding_ratio=10):
+
+ """
+    Dechirping usando CPA (Coarse Phase Alignment) con oversampling 2x
+    
+    Basado en el método del paper (Sección 3.1) y LoRaPHY.m (líneas 130-149)
+    
+    Parámetros:
+    -----------
+    sig : array complejo
+        Señal recibida (ya resampleada a 2*Bw)
+    start_idx : int
+        Índice de inicio del símbolo
+    SF : int
+        Spreading Factor
+    T : float
+        Período de símbolo
+    Bw : float
+        Bandwidth
+    is_up : bool
+        True para dechirp con downchirp (detección de up-chirps)
+        False para dechirp con upchirp (detección de down-chirps)
+    zero_padding_ratio : int
+        Factor de zero-padding para FFT
+    
+    Retorna:
+    --------
+    (peak_value, peak_bin) : tuple
+        Altura del pico y bin del pico en el espectro FFT
+    
+    Notas:
+    ------
+    - sample_num = 2*M porque la señal está oversampled a 2*Bw
+    - CORREGIDO: Usar solo magnitud FFT sin CPA para mejor discriminación
+  """
+-----
+detect_preamble_v2(sig, SF, T, Bw, preamble_len=8, zero_padding_ratio=10)
+"""
+Detecta preámbulo buscando preamble_len-1 up-chirps consecutivos
+
+Basado en LoRaPHY.m (líneas 151-188)
+
+Parámetros:
+-----------
+sig : array complejo
+    Señal recibida (ya resampleada a 2*Bw)
+SF : int
+    Spreading Factor
+T, Bw : float
+    Período y bandwidth
+preamble_len : int
+    Número total de up-chirps en el preámbulo (típicamente 8)
+zero_padding_ratio : int
+    Factor de zero-padding para FFT
+
+Retorna:
+--------
+x : int
+    Índice de inicio del preámbulo con alineación gruesa (coarse alignment)
+    Retorna -1 si no se detecta preámbulo
+
+Lógica:
+-------
+1. Ventana deslizante con paso sample_num = 2*M
+2. Busca preamble_len-1 = 7 up-chirps consecutivos (de 8 totales)
+3. Verifica consistencia de bins: bin_diff <= zero_padding_ratio
+4. Aplica alineación gruesa: x = ii - round(peak_bin / zero_padding_ratio * 2)
+"""
+While explicado
+    while (ii < len(sig) - sample_num * preamble_len):  
+    # Si encontramos preamble_len-1 chirps consecutivos, tenemos un preámbulo    
+        if len(pk_bin_list) >= preamble_len - 1:
+            # Preámbulo detectado!
+            # Alineación gruesa: compensar el desplazamiento del pico
+            # El factor *2 es porque estamos oversampleados a 2*Bw
+            # CORREGIDO: Eliminar el -1 porque peak_bin ahora empieza desde 0
+            x = ii - round(pk_bin_list[-1] / zero_padding_ratio * 2)
+            return x
+------
+sync_frame(sig, x_coarse, SF, T, Bw, zero_padding_ratio=10)
+
+ """
+Sincronización fina detectando SFD (Start Frame Delimiter)
+
+Basado en LoRaPHY.m (líneas 560-619)
+
+Parámetros:
+-----------
+sig : array complejo
+    Señal recibida (oversampled a 2*Bw)
+x_coarse : int
+    Índice de alineación gruesa desde detect_preamble_v2
+SF, T, Bw : parámetros LoRa
+zero_padding_ratio : int
+
+Retorna:
+--------
+x_sync : int
+    Índice de inicio del payload
+preamble_bin : int
+    Bin de referencia para compensación CFO
+cfo : float
+    Carrier Frequency Offset estimado (en Hz)
+
+Pasos:
+------
+1. Buscar transición up-chirp → down-chirp (SFD)
+2. Up-Down Alignment: ajustar con bin del down-chirp
+3. Calcular preamble_bin de referencia
+4. Estimar CFO
+5. Determinar si estamos en 1er o 2do downchirp
+6. Saltar 2.25 downchirps para llegar al payload
+"""
+-------
+demodulate_frame_complete(trama_rx, SF, T, Bw, preamble_len=8, zero_padding_ratio=10)
+
+"""
+Demodulación completa de trama LoRa: detect → sync → demodulate
+
+Basado en LoRaPHY.m demodulate() (líneas 190-277)
+
+Parámetros:
+-----------
+trama_rx : array complejo
+    Trama recibida (puede estar en cualquier parte de la señal)
+SF, T, Bw : parámetros LoRa
+preamble_len : int
+    Longitud del preámbulo (típicamente 8)
+zero_padding_ratio : int
+    Factor de zero-padding
+
+Retorna:
+--------
+simbolos_rx : array
+    Símbolos demodulados del payload
+x_payload : int
+    Índice de inicio del payload en la señal oversampleada
+cfo : float
+    CFO estimado
+info : dict
+    Información adicional de depuración
+
+Flujo:
+------
+1. Resamplear señal a 2*Bw (oversampling)
+2. detect_preamble_v2() → alineación gruesa
+3. sync_frame() → alineación fina + CFO
+4. Demodular payload con n_tuple_former adaptado
+5. (Opcional) Compensar CFO drift
+"""
+
+
+
+  
